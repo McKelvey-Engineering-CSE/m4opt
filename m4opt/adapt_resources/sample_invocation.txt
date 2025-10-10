@@ -1,0 +1,1 @@
+m4opt schedule GW[...]_CONVERTED.fits SCHEDULE.ecsv --mission=adapt --skygrid=allsky --visits=1 --exptime-min=1.0s --exptime-max=1.0s --deadline=100.0s --timelimit 100.0s

@@ -235,6 +235,9 @@ def schedule(
         hpx = HEALPix(nside, frame=ICRS(), order="nested")
         skymap_moc = read_sky_map(skymap, moc=True)
         skymap_flat = rasterize(skymap_moc, hpx.level)
+
+        print(skymap_moc.meta)
+
         event_time = Time(
             Time(skymap_moc.meta["gps_time"], format="gps").utc, format="iso"
         )
