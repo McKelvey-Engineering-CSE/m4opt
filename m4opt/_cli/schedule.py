@@ -303,7 +303,8 @@ def schedule(
         footprints = footprint_healpix(hpx, mission.fov, target_coords, rolls)
 
         # Select only the most probable 50 fields.
-        n_fields = 50
+        n_fields = 50 #600 #2675 #200 # 706
+        print("processing top", n_fields, "of", len(target_coords), "fields available")
         if len(target_coords) > n_fields:
             good = np.argpartition(
                 [-skymap_flat[footprint]["PROB"].sum() for footprint in footprints],
