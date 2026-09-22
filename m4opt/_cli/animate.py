@@ -351,6 +351,8 @@ def animate(
                     visit_footprint_color,
                 )
             ax_area.set_ylim(0 * u.deg**2)
+            print("Total probability:",table["prob"].max())
+            print(f"Over {table['prob'].size} visits")
 
             now_line = ax_timeline.axvline(
                 (time_steps[0] - event_time).to(u.hour),
