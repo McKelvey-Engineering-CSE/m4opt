@@ -3,6 +3,9 @@
 Installation
 ============
 
+.. important::
+    M4OPT currently supports Python 3.12, 3.13, or 3.14.
+
 The recommended way to install |M4OPT| is using :doc:`pip:index`::
 
     $ pip install m4opt

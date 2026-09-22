@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 #
 # Astropy documentation build configuration file.
@@ -31,10 +30,12 @@ import sys
 import tomllib
 from importlib import import_module
 
+from sphinx.builders import linkcheck
+
 from m4opt.utils.pybtex.styles import short_alpha  # noqa: F401
 
 try:
-    from sphinx_astropy.conf.v2 import *  # noqa
+    from sphinx_astropy.conf.v2 import *
 except ImportError:
     print(
         "ERROR: the documentation requires the sphinx-astropy package to be installed"
@@ -60,20 +61,20 @@ highlight_language = "python3"
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
-exclude_patterns.append("_templates")  # noqa: F405
+exclude_patterns.append("_templates")
 
 # This is added to the end of RST files - a good place to put substitutions to
 # be used globally.
 rst_epilog += r"""
 .. |M4OPT| replace:: M\ :sup:`4`\ OPT
-"""  # noqa: F405
+"""
 
 # -- Project information ------------------------------------------------------
 
 # This does not *have* to match the package name, but typically does
 project = project_metadata["name"]
 author = project_metadata["authors"][0]["name"]
-copyright = "{0}, {1}".format(datetime.datetime.now().year, author)
+copyright = f"{datetime.datetime.now(datetime.UTC).year}, {author}"
 
 # The version info for the project you're documenting, acts as replacement for
 # |version| and |release|, also used in various other places throughout the
@@ -142,7 +143,7 @@ htmlhelp_basename = project + "doc"
 # Prefixes that are ignored for sorting the Python module index
 modindex_common_prefix = ["m4opt."]
 
-html_theme_options.update(  # noqa: F405
+html_theme_options.update(
     {
         "github_url": "https://github.com/m4opt/m4opt",
         "use_edit_page_button": True,
@@ -177,7 +178,7 @@ man_pages = [("index", project.lower(), project + " Documentation", [author], 1)
 
 # -- Options for the edit_on_github extension ---------------------------------
 
-extensions += ["sphinx_astropy.ext.edit_on_github"]  # noqa: F405
+extensions += ["sphinx_astropy.ext.edit_on_github"]
 
 edit_on_github_project = "m4opt/m4opt"
 edit_on_github_branch = "main"
@@ -186,7 +187,7 @@ edit_on_github_source_root = ""
 edit_on_github_doc_root = "docs"
 
 # -- Resolving issue number to links in changelog -----------------------------
-github_issues_url = "https://github.com/{0}/issues/".format(edit_on_github_project)
+github_issues_url = f"https://github.com/{edit_on_github_project}/issues/"
 
 
 # -- Options for linkcheck output -------------------------------------------
@@ -225,10 +226,11 @@ linkcheck_anchors = False
 
 
 # -- Options for intersphinx --------------------------------------------------
-intersphinx_mapping.update(  # noqa: F405
+intersphinx_mapping.update(
     {
         "astropy": ("https://docs.astropy.org/en/stable/", None),
         "astropy_healpix": ("https://astropy-healpix.readthedocs.io/en/stable/", None),
+        "astroquery": ("https://astroquery.readthedocs.io/en/latest/", None),
         "docplex": ("http://ibmdecisionoptimization.github.io/docplex-doc/mp/", None),
         "dust-extinction": ("https://dust-extinction.readthedocs.io/en/latest/", None),
         "irbem": ("https://prbem.github.io/IRBEM/", None),
@@ -238,6 +240,7 @@ intersphinx_mapping.update(  # noqa: F405
         "python-packaging-guide": ("https://packaging.python.org/en/latest/", None),
         "regions": ("https://astropy-regions.readthedocs.io/en/stable/", None),
         "sympy": ("https://docs.sympy.org/latest/", None),
+        "smtn-002": ("https://smtn-002.lsst.io/", None),
         "synphot": ("https://synphot.readthedocs.io/en/stable/", None),
         "userguide": ("https://emfollow.docs.ligo.org/userguide/", None),
     }
@@ -268,3 +271,27 @@ autodoc_typehints = "description"
 extensions += ["sphinxcontrib.bibtex"]
 bibtex_bibfiles = ["refs.bib"]
 bibtex_default_style = "short_alpha"
+
+
+# -- Options for the linkcheck extension --------------------------------------
+
+
+# FIXME: workaround for https://github.com/sphinx-doc/sphinx/pull/14299
+class CustomHyperlinkAvailabilityChecker(linkcheck.HyperlinkAvailabilityChecker):
+    """Ignore 403 errors from certain servers."""
+
+    allow_403 = ("https://doi.org/",)
+
+    def check(self, hyperlinks):
+        for result in super().check(hyperlinks):
+            if result.message.startswith("403 Client Error:") and any(
+                result.uri.startswith(prefix) for prefix in self.allow_403
+            ):
+                kw = result._asdict()
+                kw["status"] = linkcheck._Status.IGNORED
+                yield linkcheck.CheckResult(**kw)
+            else:
+                yield result
+
+
+linkcheck.HyperlinkAvailabilityChecker = CustomHyperlinkAvailabilityChecker

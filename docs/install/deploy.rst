@@ -21,7 +21,7 @@ We have categorized these deployment notes using a *risk matrix*, a visualizatio
     +-------------------+-----------+-------------------------------+-------------------------------+-------------------------------+-------------------------------+-------------------------------+
     |                               | Very Low                      | Low                           | Moderate                      | High                          | Very High                     |
     +-------------------+-----------+-------------------------------+-------------------------------+-------------------------------+-------------------------------+-------------------------------+
-    | **Likelihood**    | Very High |                               |                               |                               |                               |                               |
+    | **Likelihood**    | Very High |                               |                               |                               |                               | :ref:`sgp4-fallback`          |
     |                   +-----------+-------------------------------+-------------------------------+-------------------------------+-------------------------------+-------------------------------+
     |                   | High      |                               |                               |                               |                               |                               |
     |                   +-----------+-------------------------------+-------------------------------+-------------------------------+-------------------------------+-------------------------------+
@@ -40,15 +40,20 @@ Deployment Notes
 Astropy Data Sources
 ^^^^^^^^^^^^^^^^^^^^
 
-In normal use, |M4OPT| downloads and caches a variety of Astropy-related data sources that may be time-consuming to download or may be unavailable if your network connection is down:
+In normal use, |M4OPT| downloads and caches a variety of Astropy-related data sources that may be time-consuming to download or may be unavailable if your network connection is down or if the remote service is down:
 
 - Well-known observatory locations for :meth:`astropy.coordinates.SkyCoord.from_name`
-- Dust map for :obj:`m4opt.synphot.DustExtinction`
+- Dust map for :obj:`m4opt.synphot.extinction.DustExtinction`
 - Precise Earth orientation data for :class:`~astropy.coordinates.SkyCoord` :class:`~astropy.coordinates.EarthLocation` transformations (see :ref:`Astropy documentation on working offline <astropy:iers-working-offline>`)
+- :doc:`astroquery:svo_fps/svo_fps`
 
 .. rubric:: Mitigation
 
-Run `m4opt prime <../guide/cli.html#m4opt-prime>`_ once before deployment to download and cache data sources. Ensure that you have a reliable Internet connection.
+- Ensure that you have a reliable Internet connection.
+- Run :typer:`m4opt-prime` once before deployment to download and cache data sources.
+- Configure the Astroquery cache to never expire. Edit the :ref:`Astroquery configuration file <astroquery:default_config>` at :file:`$HOME/.astropy/config/astroquery.cfg` and add the following line::
+
+    cache_timeout = -1
 
 .. _`cplex-license`:
 
@@ -71,3 +76,17 @@ CPLEX's memory usage grows as it explores potential solutions. By default, there
 .. rubric:: Mitigation
 
 Make sure that you reserve at least 8 GiB, and preferably 16 GiB or more, for running |M4OPT|. Set the ``--memory`` command-line option for the `m4opt schedule <../guide/cli.html#m4opt-prime>`_ command to at least 4 GiB less than the maximum amount of memory that you want it to use.
+
+.. _`sgp4-fallback`:
+
+SGP4 Fallback
+^^^^^^^^^^^^^
+
+We use the `SGP4`_ package performs orbit propagation for TLEs. The SGP4 package has a binary implementation and a fallback pure Python implementation. If you install M4OPT on a supported version of Python on a supported platform, then the SGP4 package will be installed from the Python Package Index with the prebuilt binary implementation included. However, if you install M4OPT on an unsupported version of Python or an unsupported platform, then the binary implementation may be missing and SGP4 will fall back to the pure Python implementation. The pure Python implementation is less well-tested (see, for example, `brandon-rhodes/python-sgp4#164`_).
+
+.. rubric:: Mitigation
+
+We have mitigated this by checking at run time that the binary implementation is active when SGP4 is imported.
+
+.. _`SGP4`: https://github.com/brandon-rhodes/python-sgp4
+.. _`brandon-rhodes/python-sgp4#164`: https://github.com/brandon-rhodes/python-sgp4/issues/164

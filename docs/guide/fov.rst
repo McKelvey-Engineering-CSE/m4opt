@@ -15,9 +15,9 @@ Supported region types
 You supply the field of view of the detector using
 :doc:`Astropy regions <regions:index>`. The following region types are
 supported: :class:`~regions.CircleSkyRegion`,
-:class:`~regions.PolygonSkyRegion`, :class:`~regions.RectangleSkyRegion`, and
-any :class:`~regions.Regions` object consisting regions of the aforementioned
-types.
+:class:`~regions.PointSkyRegion`, :class:`~regions.PolygonSkyRegion`,
+:class:`~regions.RectangleSkyRegion`, and any :class:`~regions.Regions` object
+consisting regions of the aforementioned types.
 
 .. note:: All of these region types are treated as true spherical geometry.
     :class:`~regions.CircleSkyRegion` is treated as a
@@ -141,7 +141,7 @@ on the `Nancy Grace Roman Space Telescope <https://roman.gsfc.nasa.gov>`_:
     roman = pysiaf.Siaf('roman')
     regions = Regions()
     for aper_name, aper in roman.apertures.items():
-        if re.match('^WFI\d\d_FULL$', aper_name):
+        if re.match(r'^WFI\d\d_FULL$', aper_name):
             aper.set_attitude_matrix(attmat)
             regions.append(PolygonSkyRegion(SkyCoord(*aper.corners('sky'), unit=u.deg)))
     regions.write('roman_wfi.ds9', overwrite=True)

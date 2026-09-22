@@ -1,0 +1,127 @@
+from typing import override
+
+import numpy as np
+
+from ._core import Constraint
+from ._short_circuit import logical_and_short_circuit, logical_or_short_circuit
+
+
+class LogicalReductionConstraint(Constraint):
+    def __init__(self, *operands: Constraint):
+        self._operands = tuple(operands)
+
+    @override
+    def __call__(self, *args):
+        first, *rest = self._operands
+        result = first(*args)
+        for operand in rest:
+            result = self._short_circuit(result, operand, *args)
+        return result
+
+
+class LogicalAndConstraint(LogicalReductionConstraint):
+    """
+    Combine two or more constraints using a logical "and" operation.
+
+    See Also
+    --------
+    LogicalOrConstraint, LogicalNotConstraint
+
+    Notes
+    -----
+    The order of the operands may affect performance because short-circuit
+    evaluation is employed.
+
+    Examples
+    --------
+    >>> from astropy.coordinates import EarthLocation, SkyCoord
+    >>> from astropy.time import Time
+    >>> from astropy import units as u
+    >>> from m4opt.constraints import (
+    ...     AtNightConstraint, LogicalAndConstraint, SunSeparationConstraint)
+    >>> constraint = (
+    ...     AtNightConstraint.twilight_astronomical() &
+    ...     SunSeparationConstraint(40 * u.deg))
+    >>> time = Time("2017-08-17T00:41:04Z")
+    >>> target = SkyCoord.from_name("NGC 4993")
+    >>> location = EarthLocation.of_site("Rubin Observatory")
+    >>> constraint(location, target, time)
+    np.True_
+    """
+
+    _short_circuit = staticmethod(logical_and_short_circuit)
+
+    def __and__(self, rhs):
+        if isinstance(rhs, __class__):
+            return __class__(*self._operands, *rhs._operands)
+        else:
+            return __class__(*self._operands, rhs)
+
+
+class LogicalOrConstraint(LogicalReductionConstraint):
+    """
+    Combine two or more constraints using a logical "or" operation.
+
+    See Also
+    --------
+    LogicalAndConstraint, LogicalNotConstraint
+
+    Notes
+    -----
+    The order of the operands may affect performance because short-circuit
+    evaluation is employed.
+
+    Examples
+    --------
+    >>> from astropy.coordinates import EarthLocation, SkyCoord
+    >>> from astropy.time import Time
+    >>> from astropy import units as u
+    >>> from m4opt.constraints import (
+    ...     AtNightConstraint, LogicalOrConstraint, SunSeparationConstraint)
+    >>> constraint = (
+    ...     AtNightConstraint.twilight_astronomical() |
+    ...     SunSeparationConstraint(40 * u.deg))
+    >>> time = Time("2017-08-17T00:41:04Z")
+    >>> target = SkyCoord.from_name("NGC 4993")
+    >>> location = EarthLocation.of_site("Rubin Observatory")
+    >>> constraint(location, target, time)
+    np.True_
+    """
+
+    _short_circuit = staticmethod(logical_or_short_circuit)
+
+    def __or__(self, rhs):
+        if isinstance(rhs, __class__):
+            return __class__(*self._operands, *rhs._operands)
+        else:
+            return __class__(*self._operands, rhs)
+
+
+class LogicalNotConstraint(Constraint):
+    """
+    Perform a logical "not" on a constraint.
+
+    See Also
+    --------
+    LogicalAndConstraint, LogicalOrConstraint
+
+    Examples
+    --------
+    >>> from astropy.coordinates import EarthLocation, SkyCoord
+    >>> from astropy.time import Time
+    >>> from astropy import units as u
+    >>> from m4opt.constraints import (AtNightConstraint, LogicalNotConstraint)
+    >>> constraint = ~AtNightConstraint.twilight_astronomical()
+    >>> time = Time("2017-08-17T00:41:04Z")
+    >>> target = SkyCoord.from_name("NGC 4993")
+    >>> location = EarthLocation.of_site("Rubin Observatory")
+    >>> constraint(location, target, time)
+    np.False_
+    """
+
+    def __init__(self, operand: Constraint):
+        self._operand = operand
+
+    @override
+    def __call__(self, *args):
+        return np.logical_not(self._operand(*args))

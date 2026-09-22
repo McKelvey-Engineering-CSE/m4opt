@@ -28,17 +28,20 @@ repos:
         exclude_types: [python] # Covered by Ruff W291.
   - repo: https://github.com/astral-sh/ruff-pre-commit
     # Ruff version.
-    rev: v0.12.10
+    rev: v0.16.7
     hooks:
       # Run the linter.
-      - id: ruff
+      - id: ruff-check
         args: ["--extend-select", "I", "--fix"]
       # Run the formatter.
       - id: ruff-format
   - repo: https://github.com/codespell-project/codespell
-    rev: v2.4.1
+    rev: v2.4.3
     hooks:
       - id: codespell
-        args: ["--write-changes"]
         additional_dependencies:
           - tomli
+  - repo: https://github.com/numpy/numpydoc
+    rev: v1.11.0rc0
+    hooks:
+      - id: numpydoc-validation

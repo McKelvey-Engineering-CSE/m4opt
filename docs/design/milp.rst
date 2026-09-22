@@ -109,6 +109,7 @@ For fields that have more than one observable segment (:math:`{n_M}_j > 1`), we 
 
 .. math::
     :label: fixed-exptime-constraint-for-many
+    :no-wrap:
 
     \begin{eqnarray}
     \forall j ,\; k \;, m \mid {n_M}_j > 1 :\quad s_{jkm} &=& 1 \;\Rightarrow\; \alpha_{jm} + \epsilon / 2 \leq t_{jk} \leq \omega_{jm} - \epsilon / 2, \\
@@ -135,10 +136,44 @@ Maximize the sum of the probability of all of the pixels that are contained with
 
     \sum_{i \in I} \rho_i p_i
 
-Problem 2: Variable exposure time
+Problem 2: Filter changes with fixed exposure time
+--------------------------------------------------
+
+In this variation, we enforce that every field must be visited for the :math:`k`th before any field is visited for the :math:`(k + 1)` time to allow for length filter changes to occur between visits. The exposure time is fixed for all fields and visits.
+
+MILP problem formulation
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+Constraints
+"""""""""""
+
+The constraints are slightly different:
+
+**Depth.** Same as above.
+
+**Cadence.** Same as above.
+
+**No overlap.** This is similar to Equation :eq:`fixed-exptime-constraint-no-overlap`, but is broken down into two cases with slightly different left-hand sides.
+
+.. math::
+    :label: filter-change-constraint-no-overlap
+    :no-wrap:
+
+    \begin{eqnarray}
+    \forall j \neq j',\; k > 1 :\quad t_{jk} - t_{j^\prime, k-1} \geq \left(\sigma_{jj^\prime} + \epsilon\right) \left( r_j + r_{j^\prime} - 1\right)\\
+    \forall j \neq j',\; k :\quad \left|t_{jk} - t_{j^\prime k}\right| \geq \left(\sigma_{jj^\prime} + \epsilon\right) \left( r_j + r_{j^\prime} - 1\right)
+    \end{eqnarray}
+**Field of regard.** Same as above.
+
+Objective
+"""""""""
+
+Same as above.
+
+Problem 3: Variable exposure time
 ---------------------------------
 
-In this variation, we have a sky map of the exposure time required to detect the source as a function of its position on the sky. We permit the exposure time to vary for each field. A given pixel counts toward the objective value only if the exposure time of a field that contains that pixel exceeds the pixel's exposure time.
+In this variation of Problem 1, we have a sky map of the exposure time required to detect the source as a function of its position on the sky. We permit the exposure time to vary for each field. A given pixel counts toward the objective value only if the exposure time of a field that contains that pixel exceeds the pixel's exposure time.
 
 MILP problem formulation
 ^^^^^^^^^^^^^^^^^^^^^^^^
@@ -203,6 +238,7 @@ For fields that have more than one observable segment:
 
 .. math::
     :label: variable-exptime-constraint-for-many
+    :no-wrap:
 
     \begin{eqnarray}
     \forall j ,\; k \;, m \mid {n_M}_j > 1 :\quad s_{jkm} &=& 1 \;\Rightarrow\; \alpha_{jm} + e_j / 2 \leq t_{jk} \leq \omega_{jm} - e_j / 2, \\
@@ -216,6 +252,7 @@ Additional cuts
 
 .. math::
     :label: variable-exptime-cut-total-time
+    :no-wrap:
 
     \begin{eqnarray}
     \sum_{j \in J} r_j &\leq& \frac{\delta - \beta}{\epsilon_\mathrm{min} n_K} \\
@@ -227,7 +264,7 @@ Objective
 
 Same as above.
 
-Problem 3: Variable exposure time with prior distribution of absolute magnitude
+Problem 4: Variable exposure time with prior distribution of absolute magnitude
 -------------------------------------------------------------------------------
 
 In this variation, we don't know the precise absolute magnitude :math:`X` of the source. In the case of kilonovae, our prior knowledge about the absolute magnitude is scant; for the sake of mathematical convenience, we assume that the absolute magnitude has a normal distribution, :math:`X \sim~ \mathcal{N}[\mu_X, \sigma_X]`. We need to compute the distribution of *apparent* magnitudes :math:`x` in order to determine the probability of detection as a function of exposure time for each pixel.
@@ -243,6 +280,7 @@ We calculate the mean :math:`m` and standard deviation :math:`s` from :math:`\mu
 
 .. math::
     :label: log-distance-parameters
+    :no-wrap:
 
     \begin{eqnarray}
     \mu_{\ln r} &=& \ln m - \frac{1}{2} \ln \left(1 + \frac{s^2}{m^2}\right) \\
@@ -253,6 +291,7 @@ The logarithm of the distance then has the distribution :math:`\ln r \sim \mathc
 
 .. math::
     :label: appmag-parameters
+    :no-wrap:
 
     \begin{eqnarray}
     \mu_x &=& \mu_X + \left(\frac{5}{\ln 10}\right) \mu_{\ln r} + 25 \\

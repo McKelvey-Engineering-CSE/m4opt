@@ -5,31 +5,31 @@ authors = [{name = "M4OPT Developers", email = "leo.singer@ligo.org"}]
 license = "BSD-3-Clause"
 description = "Multi-Mission Multi-Messenger Observation Planning Toolkit"
 readme = "README.rst"
-requires-python = ">=3.11"
+requires-python = ">=3.12, <3.15"
 dependencies = [
-    "aep8",
+    "aep8 >= 1.1.0",
     "antiprism-python",
     "astropy >= 7.1.0",
     "astropy-healpix",
     "astroquery",
-    "click >= 8.2.0",  # https://github.com/pallets/click/pull/2829
-    "cplex",
+    "cplex ~= 22.2.0.0",
     "docplex",
-    "dust-extinction",
+    "dust-extinction >= 1.7",
     "dustmaps",
-    "ligo.skymap >= 2.4.0",
+    "frozendict; python_version < '3.15'",
+    "ligo.skymap >= 2.5.4",
     "networkx",
-    "numpy >= 2.1.0",
+    "numpy >= 2.5.0",  # https://github.com/numpy/numpy/pull/30870
     "regions",
     "pymetis",
     "satellitetle",
     "scipy",
     "sgp4",
+    "shapely >= 2.1.0",
     "spiceypy",
     "sympy",
     "synphot",
-    "typer >= 0.16.0",
-    "typing_extensions; python_version < \"3.12\"",
+    "typer >= 0.26.0",
     "xdg-base-dirs",
 ]
 classifiers = [
@@ -38,17 +38,23 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "Operating System :: MacOS",
     "Operating System :: POSIX :: Linux",
-    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Astronomy",
     "Typing :: Typed",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 test = [
     "astroplan",
+    "hypothesis",
     "networkx",
+    "sphinx",
     "sphinxcontrib-bibtex",
     "pytest-astropy",
+    "pytest-benchmark",
+    "pytest-regressions",
 ]
 docs = [
     "pysiaf",
@@ -67,18 +73,21 @@ Homepage = "https://m4opt.readthedocs.io/"
 [project.scripts]
 m4opt = "m4opt._cli:app"
 
-[tool.setuptools.packages.find]
-
 [tool.setuptools.package-data]
 "*" = [
     "py.typed",
     "*.txt",
+    "*.csv",
     "*.ecsv",
+    "*.xml",
 ]
+
+[tool.setuptools.exclude-package-data]
+"*" = ["*.c"]
 
 [tool.pytest.ini_options]
 testpaths = [
-    "m4opt",
+    "src/m4opt",
     "docs",
 ]
 norecursedirs = [
@@ -98,9 +107,9 @@ doctest_optionflags = [
 
 [tool.coverage.run]
 omit = [
-    "m4opt/*setup_package*",
-    "m4opt/extern/*",
-    "m4opt/_version*",
+    "src/m4opt/*setup_package*",
+    "src/m4opt/extern/*",
+    "src/m4opt/_version*",
     "*/m4opt/*setup_package*",
     "*/m4opt/extern/*",
     "*/m4opt/_version*",
@@ -122,11 +131,16 @@ exclude_also = [
 ]
 
 [build-system]
-requires = ["setuptools>=64", "setuptools_scm>=8"]
+requires = [
+    "extension-helpers>=1.5,<2",
+    "numpy>=2",
+    "setuptools>=64",
+    "setuptools_scm>=8",
+]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools_scm]
-write_to = "m4opt/_version.py"
+write_to = "src/m4opt/_version.py"
 
 [tool.mypy]
 exclude = ["^docs/"]
@@ -140,3 +154,47 @@ ignore-words-list = """
     ToO,
     ToOs,
 """
+
+# Currently, free-threaded builds do not support the Python Limited API.
+# See https://github.com/python/cpython/issues/111506
+[[tool.cibuildwheel.overrides]]
+select = "cp3??t-*"
+inherit.environment = "append"
+environment.EXTENSION_HELPERS_PY_LIMITED_API = ""
+
+[[tool.cibuildwheel.overrides]]
+# macOS x86_64 wheels are built on GitHub on macOS 15; set deployment target accordingly
+select = "*macosx_x86_64"
+inherit.environment = "append"
+environment.MACOSX_DEPLOYMENT_TARGET = "15.0"
+
+[[tool.cibuildwheel.overrides]]
+# macOS arm64 wheels are built on GitHub on macOS 14; set deployment target accordingly
+select = "*macosx_arm64"
+inherit.environment = "append"
+environment.MACOSX_DEPLOYMENT_TARGET = "14.0"
+
+[tool.cibuildwheel.macos]
+before-all = "brew install llvm@15 libomp"
+
+[tool.cibuildwheel.macos.environment]
+CC = "$(brew --prefix llvm@15)/bin/clang"
+CXX = "$(brew --prefix llvm@15)/bin/clang++"
+CPPFLAGS = "-I$(brew --prefix libomp)/include"
+LDFLAGS = "-L$(brew --prefix libomp)/lib"
+
+[tool.numpydoc_validation]
+checks = [
+    "all",
+    "ES01",
+    "EX01",
+    "GL08",
+    "PR01",
+    "PR04",
+    "RT01",
+    "SA01",
+    "SA04",
+]
+
+[tool.extension-helpers]
+use_extension_helpers = true
