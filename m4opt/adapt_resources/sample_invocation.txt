@@ -1,1 +1,3 @@
-m4opt schedule GW[...]_CONVERTED.fits SCHEDULE.ecsv --mission=adapt --skygrid=allsky --visits=1 --exptime-min=1.0s --exptime-max=1.0s --deadline=100.0s --timelimit 100.0s
+m4opt schedule /home/msudvarg/Telescope-Searching-Problem/data/ligo_healpix_flattened/GW191103_012549_CONVERTED.fits SCHEDULE.ecsv --mission=adapt --skygrid=allsky --visits=1 --exptime-min=10.0s --exptime-max=10.0s --deadline=600.0s --timelimit 600.0s
+m4opt schedule /home/msudvarg/Telescope-Searching-Problem/data/ligo_healpix_flattened/GW200105_162426_CONVERTED.fits SCHEDULE.ecsv --mission=adapt --skygrid=allsky --visits=1 --exptime-min=1.0s --exptime-max=1.0s --deadline=600.0s --timelimit 600.0s
+m4opt animate SCHEDULE.ecsv MOVIE.gif
