@@ -18,6 +18,8 @@ from ligo.skymap.bayestar import rasterize
 from ligo.skymap.io import read_sky_map
 from scipy import stats
 
+from time import perf_counter # for tracking planning time
+
 from .. import __version__, missions
 from ..dynamics import nominal_roll
 from ..fov import footprint_healpix
@@ -138,6 +140,15 @@ def schedule(
             help="Time step for evaluating field of regard",
         ),
     ] = 1 * u.min,
+    ###### added: make time window configurable
+    time_windows: Annotated[
+        bool,
+        typer.Option(
+            "--time-windows/--no-time-windows",
+            help="Enforce mission field-of-regard visibility windows",
+        ),
+    ] = True,
+    ####
     exptime_max: Annotated[
         u.Quantity,
         typer.Option(
@@ -210,6 +221,15 @@ def schedule(
             rich_help_panel="Solver Options",
         ),
     ] = 0,
+    ####### Daisy: for cpp solvers
+    cpp_algorithm: Annotated[
+        str | None,
+        typer.Option(
+            help="Use this no-window C++ algorithm instead of the MILP",
+            rich_help_panel="Solver Options",
+        ),
+    ] = None,
+    ########
     cutoff: Annotated[
         float | None,
         typer.Option(
@@ -269,6 +289,10 @@ def schedule(
     is observed for the (k+1)th, and the filter is exchanged once per block
     boundary however many fields are observed.
     """
+    ######## Daisy: added, start timer for planer
+    planning_started = perf_counter()
+    ########
+
     adaptive_exptime = absmag_mean is not None
 
     # Successive visits cycle through the requested bandpasses, so that
@@ -329,19 +353,50 @@ def schedule(
         target_coords = SkyCoord(target_coords.ra, target_coords.dec)
         cadence_s = cadence.to_value(u.s)
         obstimes_s = (obstimes - obstimes[0]).to_value(u.s)
-        observable_intervals = np.asarray(
-            [
-                obstimes_s[intervals]
-                for intervals in clump_nonzero_inclusive(
-                    mission.constraints(
-                        observer_locations,
-                        target_coords[:, np.newaxis],
-                        obstimes,
+
+        ###### Daisy: commented out, orginal code with visiability window
+        # observable_intervals = np.asarray(
+        #     [
+        #         obstimes_s[intervals]
+        #         for intervals in clump_nonzero_inclusive(
+        #             mission.constraints(
+        #                 observer_locations,
+        #                 target_coords[:, np.newaxis],
+        #                 obstimes,
+        #             )
+        #         )
+        #     ],
+        #     dtype=object,
+        # )
+        ####### added, make time window configurable
+        if time_windows:
+            observable_intervals = np.asarray(
+                [
+                    obstimes_s[intervals]
+                    for intervals in clump_nonzero_inclusive(
+                        mission.constraints(
+                            observer_locations,
+                            target_coords[:, np.newaxis],
+                            obstimes,
+                        )
                     )
+                ],
+                dtype=object,
+            )
+        else:
+            horizon_s = (deadline - delay).to_value(u.s)
+            observable_intervals = np.empty(
+                len(target_coords),
+                dtype=object,
+            )
+
+            for field in range(len(target_coords)):
+                observable_intervals[field] = np.asarray(
+                    [[0.0, horizon_s]],
+                    dtype=float,
                 )
-            ],
-            dtype=object,
-        )
+        ##########
+
 
         # Keep only intervals that are at least as long as the exposure time.
         exptime_min_s = visit_exptime_min_s.min()
@@ -482,6 +537,23 @@ def schedule(
                         * DustExtinction(),
                         visit_bandpasses[0],
                     ).to_value(u.s)
+                    ######## Daisy: added, for debug and test purpose
+                    ######## Print the distribution of P2 exposure times.
+                    finite_exptime = exptime_pixel_s[
+                        np.isfinite(exptime_pixel_s)
+                    ]
+
+                    if finite_exptime.size > 0:
+                        print(
+                            "Required exposure percentiles (seconds):",
+                            np.percentile(
+                                finite_exptime,
+                                [0, 25, 50, 75, 90, 95, 99, 100],
+                            ),
+                        )
+                    else:
+                        print("No pixels have a finite required exposure time.")
+                    #######
                 exptime_min_s = min(
                     max(exptime_min_s, exptime_pixel_s.min(initial=exptime_min_s)),
                     exptime_max.to_value(u.s),
@@ -504,9 +576,319 @@ def schedule(
             rolls[slew_j],
         ).to_value(u.s)
 
+    ######## Daisy: added, Call one of the C++ solvers at this point
+    ######## Everything before this point remains M4OPT's normal preprocessing:
+    ######## (field selection, footprint generation, pixel compaction, exposure-time calculation, and slew-time calculation.)
+    if cpp_algorithm is not None:
+        if visits != 1:
+            raise UsageError(
+                "C++ solvers currently support --visits 1 only"
+            )
+
+        if time_windows:
+            raise UsageError(
+                "C++ solvers currently require --no-time-windows"
+            )
+
+        if adaptive_exptime and appmag_dist:
+            raise UsageError(
+                "C++ solvers support deterministic P2 only; "
+                "add --no-appmag-dist"
+            )
+
+        if n_fields == 0:
+            raise UsageError(
+                "There are no observable fields to optimize"
+            )
+
+        # Import m4opt_solvers extension module.
+        # Make sure the path for compiled .so(linux) file are exported
+        try:
+            import m4opt_solvers
+        except ImportError as error:
+            raise UsageError(
+                "Could not import the m4opt_solvers C++ extension. "
+                "Build the .so file and add its directory to PYTHONPATH."
+            ) from error
+
+        # Check the algorithm names.
+        available_algorithms = m4opt_solvers.available_algorithms()
+
+        normalized_algorithm = (
+            cpp_algorithm.strip().lower().replace("-", "_").replace(" ", "_")
+        )
+
+        # Normalize algorithm names
+        if normalized_algorithm == "ilp_continuous_time":
+            normalized_algorithm = "ilp_continuous"
+
+        if normalized_algorithm not in available_algorithms:
+            raise UsageError(
+                f"Unknown C++ algorithm {cpp_algorithm!r}. "
+                f"Available algorithms: {', '.join(available_algorithms)}"
+            )
+
+        # M4OPT evaluates only the upper triangle of the slew-time matrix.
+        # Reconstruct the complete symmetric matrix for the C++ solvers.
+        # This matrix contains pure slew times. 
+        slew_matrix_s = np.zeros(
+            (n_fields, n_fields),
+            dtype=float,
+        )
+
+        slew_matrix_s[slew_i, slew_j] = slew_time_s
+        slew_matrix_s[slew_j, slew_i] = slew_time_s
+
+        # Every pixel index in member_pixels refers to an entry in pixel_probabilities.
+        pixel_probabilities = np.asarray(
+            skymap_flat["PROB"],
+            dtype=float,
+        ).tolist()
+
+        member_pixels = [
+            np.asarray(
+                footprint,
+                dtype=np.int64,
+            ).tolist()
+            for footprint in footprints
+        ]
+
+        # The physical observing interval starts at obstimes[0], which already includes M4OPT's requested delay.
+        budget_s = (deadline - delay).to_value(u.s)
+
+        # A zero C++ time limit means unlimited. 
+        # While M4OPT represents its default unlimited time limit using a very large quantity.
+        solver_time_limit_s = timelimit.to_value(u.s)
+        if not np.isfinite(solver_time_limit_s) or solver_time_limit_s >= 1e50:
+            solver_time_limit_s = 0.0
+
+        solver_call_started = perf_counter() # planing time counter
+        with status(
+            f"solving with C++ {normalized_algorithm}"
+        ):
+            if adaptive_exptime:
+                # Deterministic variable-exposure P2.
+                # exptime_pixel_s gives the exposure threshold required to detect each compact pixel. 
+                result = m4opt_solvers.solve_p2(
+                    slew_seconds=slew_matrix_s.tolist(),
+                    pixel_probabilities=pixel_probabilities,
+                    member_pixels=member_pixels,
+                    required_exposure_seconds=np.asarray(
+                        exptime_pixel_s,
+                        dtype=float,
+                    ).tolist(),
+                    minimum_exposure_seconds=exptime_min_s,
+                    maximum_exposure_seconds=exptime_max_s,
+                    budget_seconds=budget_s,
+                    algorithm=normalized_algorithm,
+                    time_limit_seconds=solver_time_limit_s,
+                    thread_count=jobs,
+                )
+            else:
+                # Fixed-exposure P1. Every field receives the same exposure duration selected by M4OPT's --exptime-min option.
+                dwell_seconds = np.full(
+                    n_fields,
+                    exptime_min_s,
+                    dtype=float,
+                ).tolist()
+
+                result = m4opt_solvers.solve_p1(
+                    slew_seconds=slew_matrix_s.tolist(),
+                    pixel_probabilities=pixel_probabilities,
+                    member_pixels=member_pixels,
+                    dwell_seconds=dwell_seconds,
+                    budget_seconds=budget_s,
+                    algorithm=normalized_algorithm,
+                    time_limit_seconds=solver_time_limit_s,
+                    thread_count=jobs,
+                )
+
+        # Get planning time
+        solver_call_seconds = (
+            perf_counter() - solver_call_started
+        )
+
+        if not result["has_path"]:
+            raise UsageError(
+                f"C++ algorithm {normalized_algorithm!r} "
+                "did not return a feasible path"
+            )
+
+        # The C++ result is already in chronological observation order.
+        selected = np.asarray(
+            result["tile_indices"],
+            dtype=np.intp,
+        )
+
+        start_seconds = np.asarray(
+            result["start_seconds"],
+            dtype=float,
+        )
+
+        exposure_seconds = np.asarray(
+            result["exposure_seconds"],
+            dtype=float,
+        )
+
+        if not (
+            len(selected)
+            == len(start_seconds)
+            == len(exposure_seconds)
+        ):
+            raise RuntimeError(
+                "The C++ solver returned result arrays with different lengths"
+            )
+
+        if np.any(selected < 0) or np.any(selected >= n_fields):
+            raise RuntimeError(
+                "The C++ solver returned an invalid field index"
+            )
+
+        if len(np.unique(selected)) != len(selected):
+            raise RuntimeError(
+                "The C++ solver returned a repeated physical field"
+            )
+
+        if result["duration_seconds"] > budget_s + 1e-8:
+            raise RuntimeError(
+                "The C++ solver returned a schedule exceeding the deadline"
+            )
+        ## valid result from cpp solvers
+        duration_seconds = float(result["duration_seconds"])
+        tolerance = 1e-8
+
+        if (
+            not np.all(np.isfinite(start_seconds))
+            or not np.all(np.isfinite(exposure_seconds))
+            or not np.isfinite(duration_seconds)
+        ):
+            raise RuntimeError(
+                "The C++ solver returned non-finite timing values"
+            )
+
+        if (
+            np.any(start_seconds < 0)
+            or np.any(exposure_seconds < 0)
+            or duration_seconds < 0
+        ):
+            raise RuntimeError(
+                "The C++ solver returned negative timing values"
+            )
+
+        if (
+            len(start_seconds) > 1
+            and np.any(np.diff(start_seconds) < -tolerance)
+        ):
+            raise RuntimeError(
+                "The C++ observations are not in chronological order"
+            )
+
+        if np.any(
+            start_seconds + exposure_seconds
+            > budget_s + tolerance
+        ):
+            raise RuntimeError(
+                "A C++ observation ends after the deadline"
+            )
+
+        if duration_seconds > budget_s + tolerance:
+            raise RuntimeError(
+                "The C++ solver returned a schedule exceeding the deadline"
+            )
+        ## Organize result in Qtable
+        table = QTable(
+            {
+                "action": np.full(
+                    len(selected),
+                    "observe",
+                ),
+                "start_time": (
+                    obstimes[0]
+                    + start_seconds * u.s
+                ),
+                "duration": exposure_seconds * u.s,
+                "target_coord": target_coords[selected],
+                "roll": rolls[selected],
+                "field_id": field_ids[selected],
+                "bandpass": np.repeat(
+                    np.array(
+                        [visit_bandpasses[0] or ""],
+                        dtype=str,
+                    ),
+                    len(selected),
+                ),
+            },
+            descriptions={
+                    "action": "Action for the spacecraft",
+                    "start_time": "Start time of segment",
+                    "duration": "Duration of segment",
+                    "target_coord": "Coordinates of the center of the FOV",
+                    "roll": "Position angle of the FOV",
+                    "field_id": "The mission's ID for the field observed",
+                    "bandpass": "Detector bandpass",
+            },
+            meta={
+                "command": shlex.join(sys.argv),
+                "version": __version__,
+                "args": {
+                    "deadline": deadline,
+                    "delay": delay,
+                    "mission": mission.name,
+                    "skygrid": skygrid,
+                    "nside": nside,
+                    "max_fields": max_fields,
+                    "time_step": time_step,
+                    "skymap": skymap.name,
+                    "event_time": event_time.isot,
+                    "visits": visits,
+                    "exptime_min": exptime_min,
+                    "exptime_max": exptime_max,
+                    "absmag_mean": absmag_mean,
+                    "absmag_stdev": absmag_stdev,
+                    "appmag_dist": appmag_dist,
+                    "bandpass": visit_bandpasses,
+                    "snr": snr,
+                    "cutoff": cutoff,
+                    "time_windows": time_windows,
+                    "solution_time": result["runtime_seconds"] * u.s,
+                    "solver_call_time": solver_call_seconds * u.s,
+                },
+                "objective_value": result["coverage"],
+                "best_bound": result["best_bound"],
+                "solution_status": (
+                    "time limit"
+                    if result["timed_out"]
+                    else "ok"
+                ),
+                "solution_time": (
+                    result["runtime_seconds"] * u.s
+                ),
+                "cpp_algorithm": result["algorithm"],
+                "cpp_no_time_windows": True,
+            },
+        )
+
+        table.sort("start_time")
+        table.meta["planning_time"] = (
+            perf_counter() - planning_started
+        ) * u.s
+
+        table.write(
+            schedule,
+            format="ascii.ecsv",
+            overwrite=True,
+        )
+
+        return
+    ##########
+
+     # Run original M4OPT MILP solver from here
     with Model(
         timelimit=timelimit, jobs=jobs, memory=memory, lowercutoff=cutoff
     ) as model:
+        #### Daisy: define optimality GAP
+        model.context.cplex_parameters.mip.tolerances.mipgap = 0.001
+
         with status("assembling MILP model"):
             if adaptive_exptime and appmag_dist:
                 pixel_vars = model.continuous_vars(
@@ -715,7 +1097,9 @@ def schedule(
                 model.maximize(
                     model.scal_prod_vars_all_different(pixel_vars, skymap_flat["PROB"])
                 )
-
+        ###### Daisy: added, init timer for original solver
+        solver_call_seconds = 0.0 
+        ######
         if has_model := (
             model.number_of_constraints + model.objective_expr.number_of_terms() > 0
         ):
@@ -725,8 +1109,11 @@ def schedule(
 
                 if write_model is not None:
                     model.to_stream(write_model)
-
+                solver_call_started = perf_counter() # Daisy: added, get M4OPT MILP planning time
                 solution = model.solve()
+                solver_call_seconds = (
+                    perf_counter() - solver_call_started 
+                )
         else:
             solution = None
 
@@ -811,6 +1198,13 @@ def schedule(
                         "bandpass": visit_bandpasses,
                         "snr": snr,
                         "cutoff": cutoff,
+                        ###### Daisy: added, add planning time to result for analysis
+                        "time_windows": time_windows,
+                        "solution_time": (
+                            model.solve_details.time if has_model else 0
+                        ) * u.s,
+                        "solver_call_time": solver_call_seconds * u.s,
+                        ######
                     },
                     "objective_value": objective_value,
                     "best_bound": model.best_bound if has_model else 0,
@@ -875,5 +1269,9 @@ def schedule(
             table.meta["total_time"]["slack"] = (
                 deadline - delay - total_time_by_action["duration"].sum()
             ).to(u.s)
+            # Daisy: add planning time as a section
+            table.meta["planning_time"] = (
+                perf_counter() - planning_started
+            ) * u.s
 
             table.write(schedule, format="ascii.ecsv", overwrite=True)
