@@ -1,17 +1,19 @@
+import astropy.units as u
 import numpy as np
 from astropy import units as u
-from astropy.coordinates import SkyCoord
+from astropy.coordinates import EarthLocation, SkyCoord
 from regions import RectangleSkyRegion
 from synphot import Gaussian1D, SpectralElement
 
+from ...observer import EarthFixedObserverLocation
 from .. import skygrid
-from ..dynamics import EigenAxisSlew
-from ..observer import TleObserverLocation
+from ..dynamics import TwoAxisSlew
 from ..synphot import Detector
 from ..synphot.background import GalacticBackground
 from ._core import Mission
 
 FIELD_OF_VIEW = 4.6
+ROLLA = EarthLocation.from_geodetic(lon=-91.774237, lat=37.953132, height=330 * u.m)
 
 s30pro = Mission(
     name="s30pro",
@@ -49,21 +51,16 @@ s30pro = Mission(
         dark_noise=1e-3 * u.Hz,
         gain=0.85,
     ),
-    # UVEX will be in a highly elliptical TESS-like orbit.
-    # This is the TESS TLE downloaded from Celestrak at 2024-09-10T00:43:57Z.
-    observer_location=TleObserverLocation(
-        "1 43435U 18038A   24262.33225493 -.00001052  00000+0  00000+0 0  9993",
-        "2 43435  51.7454  60.8303 4593193 124.3403   0.2501  0.07594463  1386",
-    ),
+    observer_location=EarthFixedObserverLocation(ROLLA),
     # Sky grid optimized for full coverage of the sky by circles circumscribed
     # within the square field of view (so that each field is fully covered
     # at all roll angles).
     skygrid=skygrid.geodesic(7.7 * u.deg**2, class_="III", base="icosahedron"),
-    # Made up slew model.
-    slew=EigenAxisSlew(
-        max_angular_velocity=10 * u.deg / u.s,
+    slew=TwoAxisSlew(
+        max_angular_velocity=6 * u.deg / u.s,
         max_angular_acceleration=100 * u.deg / u.s**2,
         settling_time=0 * u.s,
+        simultaneous_axis_motion=False,
     ),
 )
 s30pro.__doc__ = r"""SeeStar S30 Pro mission, copied from UVEX configuration."""

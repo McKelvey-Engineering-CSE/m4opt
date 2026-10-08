@@ -8,6 +8,12 @@ this package is more organized.
 """
 
 from ._roll import nominal_roll
-from ._slew import AngularMotionProfile, EigenAxisSlew, Slew
+from ._slew import AngularMotionProfile, EigenAxisSlew, Slew, TwoAxisSlew
 
-__all__ = ("AngularMotionProfile", "EigenAxisSlew", "Slew", "nominal_roll")
+__all__ = (
+	"AngularMotionProfile",
+	"EigenAxisSlew",
+	"Slew",
+	"TwoAxisSlew",
+	"nominal_roll",
+)

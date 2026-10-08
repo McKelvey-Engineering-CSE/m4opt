@@ -55,6 +55,7 @@ develop-eggs
 .installed.cfg
 distribute-*.tar.gz
 .venv
+uv.lock
 
 # Other
 .cache
