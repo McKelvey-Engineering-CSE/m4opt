@@ -54,6 +54,7 @@ sdist
 develop-eggs
 .installed.cfg
 distribute-*.tar.gz
+.venv
 
 # Other
 .cache
