@@ -40,9 +40,6 @@ class AngularMotionProfile:
     settling_time: u.Quantity[u.physical.time] = 0 * u.second
     """Time to settle to rest after a slew."""
 
-    simultaneous_axis_motion: bool = True
-    """Whether to allow simultaneous motion along multiple axes."""
-
     def _time(
         self,
         x: u.Quantity[u.physical.angle],
@@ -172,6 +169,14 @@ class AngularMotionProfile:
             dist = np.where(case5, opt3, dist)
             dist = np.where(case6, opt4, dist)
             return dist
+
+
+@dataclass
+class TwoAxisAngularMotionProfile:
+    longitudinal: AngularMotionProfile
+    latitudinal: AngularMotionProfile
+
+    simultaneous_axis_motion: bool = True
 
 
 class Slew(ABC):
@@ -313,11 +318,11 @@ class EigenAxisSlew(Slew, AngularMotionProfile):
 
 
 @dataclass
-class TwoAxisSlew(Slew, AngularMotionProfile):
+class TwoAxisSlew(Slew, TwoAxisAngularMotionProfile):
     """
     Model slew time for a spacecraft employing a two-axis maneuver.
 
-    The two axes are the longitude and latitude axes of the input coordinate frame.
+    The two axes are the longitudinal and latitudinal axes of the input coordinate frame.
     Both axes use the same motion profile, so the slew time is the longer of the
     two axis times. Roll is not an independently controllable degree of freedom for this model.
     """
@@ -349,18 +354,19 @@ class TwoAxisSlew(Slew, AngularMotionProfile):
         :
             Time to slew between the two orientations.
         """
+
         center1 = center1.spherical
         center2 = center2.spherical
 
         longitude, latitude = self.axis_separations(center1, center2)
         
-        axis1_time = self._time(longitude)
-        axis2_time = self._time(latitude)
+        long_time = self.longitudinal._time(longitude)
+        lat_time = self.latitudinal._time(latitude)
 
         if self.simultaneous_axis_motion:
-            return max(axis1_time, axis2_time)
+            return max(long_time, lat_time)
         else:
-            return axis1_time + axis2_time
+            return u.Quantity(long_time + lat_time)
 
     @staticmethod
     def axis_separations(
