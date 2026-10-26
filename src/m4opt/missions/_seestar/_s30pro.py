@@ -38,15 +38,15 @@ s30pro = Mission(
         background=GalacticBackground() + ZodiacalBackground(),
         # Approximate uncooled-camera values; calibrate from dark and bias
         # frames for the actual S30 Pro electronics and operating mode.
-        read_noise=2,
-        dark_noise=1e-2 * u.Hz,
-        gain=1,
+        read_noise=8,
+        dark_noise=3 / u.hr,
+        gain=1/6.2,
     ),
     observer_location=EarthFixedObserverLocation(ROLLA),
     # Sky grid optimized for full coverage of the sky by circles circumscribed
     # within the square field of view (so that each field is fully covered
     # at all roll angles).
-    skygrid=skygrid.extend_skygrid(skygrid.geodesic(7.7 * u.deg**2, class_="III", base="icosahedron"), 500 * u.deg),
+    skygrid=skygrid.extend_skygrid(skygrid.geodesic(1.5 * u.deg**2, class_="III", base="icosahedron"), 500 * u.deg),
     slew=TwoAxisSlew(
         longitudinal=AngularMotionProfile(
             max_angular_velocity=6 * u.deg / u.s,
