@@ -46,7 +46,7 @@ def invert_footprints(footprints, n_pixels):
     for i, js in enumerate(footprints):
         for j in js:
             pixels_to_fields_map[j].append(i)
-    return [np.asarray(field_indices) for field_indices in pixels_to_fields_map]
+    return [np.asarray(field_indices, dtype=np.intp) for field_indices in pixels_to_fields_map]
 
 
 def invert_footprints_to_regions(footprints, n_pixels):
@@ -76,6 +76,36 @@ def invert_footprints_to_regions(footprints, n_pixels):
 
 
 LARGE_EXPTIME = 1e10
+EXPOSURE_PERCENTILE = 90.0
+
+######Daisy added: cap the pixel exposure time to some threshold
+def _cap_pixel_exposures(exposure_seconds):
+    """It does not imply that the original detection SNR is met."""
+    exposure_seconds = np.asarray(exposure_seconds, dtype=float)
+    if exposure_seconds.ndim != 1 or np.any(np.isnan(exposure_seconds)) or np.any(
+        exposure_seconds < 0
+    ):
+        raise UsageError("Pixel exposure times must be one-dimensional and nonnegative, with no NaNs")
+    finite = exposure_seconds[np.isfinite(exposure_seconds)]
+    if not finite.size:
+        raise UsageError("Cannot compute the exposure percentile: no finite pixel exposure times")
+    cap_seconds = float(np.percentile(finite, EXPOSURE_PERCENTILE))
+    return np.minimum(exposure_seconds, cap_seconds), cap_seconds
+
+
+def _p1_field_dwell(exposure_seconds, footprints, minimum_seconds):
+    """Fix each P1 field duration to its largest pixel requirement."""
+    dwell_seconds = np.asarray(
+        [
+            max(
+                minimum_seconds,
+                np.max(exposure_seconds[np.asarray(pixels, dtype=np.intp)], initial=0.0),
+            )
+            for pixels in footprints
+        ],
+        dtype=float,
+    )
+    return dwell_seconds
 
 
 def prepare_piecewise_breakpoints(breakpoints):
@@ -89,6 +119,7 @@ def prepare_piecewise_breakpoints(breakpoints):
 def _validate_cpp_schedule(
     result, *, n_fields, budget_seconds, slew_matrix_s, initial_slew_s,
     adaptive_exptime, exptime_min_s, exptime_max_s=None, tolerance=1e-3,
+    p1_dwell_seconds=None,
 ):
     """Check the real-observation-only contract before indexing field arrays."""
     raw_indices = np.asarray(result["tile_indices"])
@@ -142,8 +173,18 @@ def _validate_cpp_schedule(
             exposure_seconds > exptime_max_s + tolerance
         ):
             raise RuntimeError("A C++ exposure violates the P2 duration bounds")
-    elif not np.allclose(exposure_seconds, exptime_min_s, rtol=0, atol=tolerance):
-        raise RuntimeError("A C++ exposure differs from the fixed P1 duration")
+    else:
+        if p1_dwell_seconds is None:
+            expected_exposure = exptime_min_s
+        else:
+            p1_dwell_seconds = np.asarray(p1_dwell_seconds, dtype=float)
+            if p1_dwell_seconds.shape != (n_fields,) or np.any(
+                ~np.isfinite(p1_dwell_seconds)
+            ) or np.any(p1_dwell_seconds < 0):
+                raise RuntimeError("P1 needs one finite nonnegative dwell time per real field")
+            expected_exposure = p1_dwell_seconds[selected]
+        if not np.allclose(exposure_seconds, expected_exposure, rtol=0, atol=tolerance):
+            raise RuntimeError("A C++ exposure differs from its fixed P1 field duration")
     return selected, start_seconds, exposure_seconds
 
 
@@ -163,9 +204,9 @@ def schedule(
     exptime_min: Annotated[
         list[u.Quantity[u.physical.time]],
         typer.Option(
-            help="Minimum exposure time for each observation. Repeat the "
-            "option to give each bandpass its own exposure time, in the same "
-            "order as --bandpass; a single value applies to every bandpass",
+            help="Minimum exposure time for each observation. Without --problem, "
+            "repeat for visit-specific fixed exposure times. With --problem, "
+            "the largest value used by the visits is the common minimum.",
         ),
     ],
     mission: Annotated[
@@ -305,6 +346,17 @@ def schedule(
             rich_help_panel="Solver Options",
         ),
     ] = None,
+    problem: Annotated[
+        str | None,
+        typer.Option(
+            "--problem",
+            help="Opt into capped exposures for either solver: p1 fixes each field to its maximum capped pixel "
+            "exposure; p2 optimizes durations using capped pixel requirements. "
+            "Both require --absmag-mean and --no-appmag-dist. If omitted, "
+            "use the original exposure settings without percentile capping.",
+            rich_help_panel="Solver Options",
+        ),
+    ] = None,
     ########
     cutoff: Annotated[
         float | None,
@@ -370,7 +422,34 @@ def schedule(
     ########
 
     adaptive_exptime = absmag_mean is not None
+    capped_exposure = problem is not None
+    if capped_exposure:
+        problem = problem.strip().lower()
+        if problem not in ("p1", "p2"):
+            raise UsageError("--problem must be p1 or p2")
+        if absmag_mean is None or not np.isfinite(absmag_mean):
+            raise UsageError("--problem p1 and p2 require a finite --absmag-mean to calculate pixel exposure times")
+        if appmag_dist:
+            raise UsageError("--problem p1 and p2 require --no-appmag-dist")
+        adaptive_exptime = problem == "p2"
+        minimum_values_s = u.Quantity(exptime_min).to_value(u.s)
+        maximum_s = exptime_max.to_value(u.s)
+        if (not len(minimum_values_s) or np.any(~np.isfinite(minimum_values_s))
+                or np.any(minimum_values_s < 0) or np.isnan(maximum_s)
+                or np.any(minimum_values_s > maximum_s)):
+            raise UsageError("Exposure bounds must satisfy 0 <= --exptime-min <= --exptime-max")
+    compute_pixel_exptime = adaptive_exptime or capped_exposure
+    exposure_cap_s = None
+    p1_field_dwell_s = None
+    exptime_pixel_s = np.empty(0, dtype=float)
+    piecewise_breakpoints = []
 
+    ######Daisy added: TEMPORARY CPLEX DEBUG SETTINGS; 
+    cplex_objective_scale = 1e6
+    cplex_tolerance = 1e-9
+    cplex_mip_gap = 1e-9
+    cplex_abs_mip_gap = 1e-10
+    cplex_presolve = False
 
     ######Daisy added: Validate a complete initial attitude before preprocessing.
     # With no RA/Dec, keep initial_coord=None and preserve a free first slew.
@@ -407,9 +486,9 @@ def schedule(
     visit_exptime_min_s = u.Quantity(
         [exptime_min[i % len(exptime_min)] for i in range(visits)]
     ).to_value(u.s)
-    if adaptive_exptime and bandpass is not None and len(bandpass) > 1:
+    if compute_pixel_exptime and bandpass is not None and len(bandpass) > 1:
         raise NotImplementedError(
-            "A variable exposure time is not supported with more than one bandpass."
+            "A pixel exposure map is not supported with more than one bandpass."
         )
     filter_changes = [lhs != rhs for lhs, rhs in pairwise(visit_bandpasses)]
     with status("loading sky map"):
@@ -567,7 +646,10 @@ def schedule(
         else:
             pixels_to_fields_map = invert_footprints(footprints, n_pixels)
 
-    if adaptive_exptime:
+    # Empty P2 instances skip detector evaluation but still construct exposure variables.
+    if adaptive_exptime and n_pixels == 0:
+        exptime_max_s = max(exptime_min_s, min(exptime_max.to_value(u.s), deadline.to_value(u.s)))
+    if compute_pixel_exptime and n_pixels > 0:
         if mission.detector is None:
             raise NotImplementedError("This mission does not define a detector model")
         with status("evaluating exposure time map"):
@@ -658,6 +740,10 @@ def schedule(
                     else:
                         print("No pixels have a finite required exposure time.")
                     #######
+                if capped_exposure:
+                    exptime_pixel_s, exposure_cap_s = (
+                        _cap_pixel_exposures(exptime_pixel_s)
+                    )
                 exptime_min_s = min(
                     max(exptime_min_s, exptime_pixel_s.min(initial=exptime_min_s)),
                     exptime_max.to_value(u.s),
@@ -670,6 +756,36 @@ def schedule(
                     ),
                     exptime_min_s,
                 )
+
+    if capped_exposure and not adaptive_exptime:
+        p1_field_dwell_s = _p1_field_dwell(
+            exptime_pixel_s if n_pixels else np.empty(0, dtype=float),
+            footprints,
+            visit_exptime_min_s.max(),
+        )
+        # An over-limit fixed duration makes that field unavailable, rather
+        # than invalidating the whole instance. Keep the original pixel cap.
+        keep_fields = p1_field_dwell_s <= exptime_max.to_value(u.s)
+        if not np.all(keep_fields):
+            target_coords = target_coords[keep_fields]
+            rolls = rolls[keep_fields]
+            footprints = footprints[keep_fields]
+            observable_intervals = observable_intervals[keep_fields]
+            field_ids = field_ids[keep_fields]
+            p1_field_dwell_s = p1_field_dwell_s[keep_fields]
+            n_fields = len(p1_field_dwell_s)
+            # Pixels covered only by excluded fields have no covering field;
+            # their probabilities remain unchanged and cannot be collected.
+            pixels_to_fields_map = invert_footprints(footprints, n_pixels)
+
+    if not adaptive_exptime:
+        # One row per field, one column per visit; retain legacy visit-specific
+        # constants when the capped model was not explicitly requested.
+        fixed_exptime_field_visit_s = (
+            np.tile(visit_exptime_min_s, (n_fields, 1))
+            if p1_field_dwell_s is None
+            else np.repeat(p1_field_dwell_s[:, np.newaxis], visits, axis=1)
+        )
 
     with status("calculating slew times"):
         slew_i, slew_j = np.triu_indices(n_fields, 1)
@@ -744,6 +860,10 @@ def schedule(
                 "initial_dec": initial_dec,
                 "initial_roll": initial_roll if initial_coord is not None else None,
                 "cpp_algorithm": solver_algorithm or cpp_algorithm,
+                "problem": problem,
+                "pixel_exposure_percentile": EXPOSURE_PERCENTILE
+                if capped_exposure else None,
+                "pixel_exposure_cap_seconds": exposure_cap_s,
                 # The C++ start index is an appended input matrix row
                 "start_node_index": n_fields
                 if cpp_algorithm is not None and initial_coord is not None else None,
@@ -913,7 +1033,7 @@ def schedule(
                 "the C++ extension does not expose progress or model exports"
             )
 
-        if n_fields == 0:
+        if n_fields == 0 or n_pixels == 0:
             _write_schedule(
                 field_indices=[], start_seconds=[], exposure_seconds=[],
                 observation_bandpasses=[], objective_value=0.0, best_bound=0.0,
@@ -1038,12 +1158,9 @@ def schedule(
                     **cpp_start_kwargs,
                 )
             else:
-                # Fixed-exposure P1. Every field receives the same exposure duration selected by M4OPT's --exptime-min option.
-                dwell_seconds = np.full(
-                    n_fields,
-                    exptime_min_s,
-                    dtype=float,
-                ).tolist()
+                # With one C++ visit, the fixed-duration matrix handles both
+                # original uniform exposures and explicit per-field P1 dwell.
+                dwell_seconds = fixed_exptime_field_visit_s[:, 0].tolist()
 
                 # The P1 initial node is a start pointing, not an observation: 
                 # its dwell is always zero, even when --exptime-min is positive for every real field.
@@ -1096,6 +1213,7 @@ def schedule(
             adaptive_exptime=adaptive_exptime,
             exptime_min_s=exptime_min_s,
             exptime_max_s=exptime_max_s if adaptive_exptime else None,
+            p1_dwell_seconds=p1_field_dwell_s,
         )
         _write_schedule(
             field_indices=selected,
@@ -1113,12 +1231,6 @@ def schedule(
         return
     ##########
 
-    ######Daisy added: TEMPORARY CPLEX DEBUG SETTINGS; 
-    cplex_objective_scale = 1e6
-    cplex_tolerance = 1e-9
-    cplex_mip_gap = 1e-9
-    cplex_abs_mip_gap = 1e-10
-    cplex_presolve = False
     ######Daisy added: scale the native objective and cutoff consistently.
     objective_scale = cplex_objective_scale
     solver_cutoff = None if cutoff is None else objective_scale * cutoff
@@ -1126,7 +1238,7 @@ def schedule(
     with Model(
         timelimit=timelimit, jobs=jobs, memory=memory, lowercutoff=solver_cutoff
     ) as model:
-        ######Daisy added: CPLEX debug settings.
+        ######Daisy added: CPLEX debug settings above.
         parameters = model.context.cplex_parameters
         parameters.emphasis.numerical = 1
         parameters.simplex.tolerances.feasibility = cplex_tolerance
@@ -1162,11 +1274,13 @@ def schedule(
 
             ######Daisy added: Native MILP uses exposure MIDPOINT variables.
             # For a selected field i, enforce midpoint_i >= exposure_i/2 + initial_slew_i, so its exposure cannot begin before arrival.
+            # Explicit P1 does not charge dwell for unselected fields.
+            # The bound applies to every field's first visit. 
             if initial_slew_s is not None:
                 first_exptime = (
                     exptime_field_vars
                     if adaptive_exptime
-                    else visit_exptime_min_s[0]
+                    else fixed_exptime_field_visit_s[:, 0] * (field_vars if capped_exposure else 1)
                 )
 
                 model.add_constraints_(
@@ -1180,7 +1294,7 @@ def schedule(
                     time_field_visit_vars,
                     np.tile(exptime_field_vars[:, np.newaxis], visits)
                     if adaptive_exptime
-                    else np.tile(visit_exptime_min_s, (n_fields, 1)),
+                    else fixed_exptime_field_visit_s * (field_vars[:, np.newaxis] if capped_exposure else 1),
                     observable_intervals,
                 ):
                     assert len(intervals) > 0
@@ -1221,8 +1335,9 @@ def schedule(
             # mean of theirs. Both the cadence and the slew constraints below
             # measure that separation.
             mean_consecutive_exptime_s = 0.5 * (
-                visit_exptime_min_s[:-1] + visit_exptime_min_s[1:]
-            )
+                fixed_exptime_field_visit_s[:, :-1]
+                + fixed_exptime_field_visit_s[:, 1:]
+            ) if not adaptive_exptime else None
 
             if visits > 1:
                 with status("adding cadence constraints"):
@@ -1231,8 +1346,8 @@ def schedule(
                             :, np.newaxis
                         ]
                     else:
-                        rhs = np.multiply.outer(
-                            field_vars, cadence_s + mean_consecutive_exptime_s
+                        rhs = field_vars[:, np.newaxis] * (
+                            cadence_s + mean_consecutive_exptime_s
                         )
                     model.add_constraints_(
                         (time_field_visit_vars[:, 1:] - time_field_visit_vars[:, :-1])
@@ -1248,17 +1363,29 @@ def schedule(
                         0.5 * (exptime_field_vars[slew_i] + exptime_field_vars[slew_j])
                         + slew_time_s * both_observed
                     )
+                    if capped_exposure:
+                        # With either field unselected, its pair must impose no
+                        # separation. Exposure variables alone otherwise leave
+                        # half the selected field's duration on the RHS.
+                        rhs -= 0.5 * exptime_max_s * (1 - both_observed)
                     rhs_within = rhs
-                    rhs_after = rhs
+                    rhs_after_i = rhs_after_j = rhs
                 else:
-                    # Two observations also clear each other by the slew itself.
-                    def _spacing(exptimes):
+                    # Pair each visit's duration with the duration at the other
+                    # field. The visit pair can differ between the two orders.
+                    def _spacing(p, q):
+                        half_dwell = 0.5 * (
+                            fixed_exptime_field_visit_s[slew_i[np.newaxis, :], p[:, np.newaxis]]
+                            + fixed_exptime_field_visit_s[slew_j[np.newaxis, :], q[:, np.newaxis]]
+                        )
                         return (
-                            slew_time_s[np.newaxis, :] + exptimes[:, np.newaxis]
+                            slew_time_s[np.newaxis, :] + half_dwell
                         ) * both_observed[np.newaxis, :]
 
-                    rhs = rhs_within = _spacing(visit_exptime_min_s)
-                    rhs_after = _spacing(mean_consecutive_exptime_s)
+                    visit_indices = np.arange(visits)
+                    rhs = rhs_within = _spacing(visit_indices, visit_indices)
+                    rhs_after_i = _spacing(visit_indices[1:], visit_indices[:-1])
+                    rhs_after_j = _spacing(visit_indices[:-1], visit_indices[1:])
 
                 if any(filter_changes):
                     # Every field is visited for the kth time before any field
@@ -1267,10 +1394,9 @@ def schedule(
                     # ordering also makes the absolute value redundant across
                     # visits, leaving it only within one.
                     exchange_s = mission.filter_exchange_time.to_value(u.s)
-                    gap = (
-                        rhs_after
-                        + exchange_s * np.asarray(filter_changes)[:, np.newaxis]
-                    )
+                    exchange_gaps = exchange_s * np.asarray(filter_changes)[:, np.newaxis]
+                    gap_i = rhs_after_i + exchange_gaps
+                    gap_j = rhs_after_j + exchange_gaps
                     within_visit = (
                         time_field_visit_vars[slew_i, :]
                         - time_field_visit_vars[slew_j, :]
@@ -1286,14 +1412,12 @@ def schedule(
                     model.add_constraints_(
                         model.abs(np.transpose(within_visit)) >= rhs_within
                     )
-                    model.add_constraints_(np.transpose(after_i) >= gap)
-                    model.add_constraints_(np.transpose(after_j) >= gap)
+                    model.add_constraints_(np.transpose(after_i) >= gap_i)
+                    model.add_constraints_(np.transpose(after_j) >= gap_j)
                 else:
                     p, q = full_indices(visits)
                     if not adaptive_exptime:
-                        rhs = _spacing(
-                            0.5 * (visit_exptime_min_s[p] + visit_exptime_min_s[q])
-                        )
+                        rhs = _spacing(p, q)
                     model.add_constraints_(
                         model.abs(
                             time_field_visit_vars[slew_i, p[:, np.newaxis]]
@@ -1310,6 +1434,14 @@ def schedule(
 
             with status("adding coverage constraints"):
                 if adaptive_exptime:
+                    if capped_exposure:
+                        # A zero threshold still requires a selected observation.
+                        model.add_constraints_(
+                            pixel_vars <= [
+                                model.sum_vars_all_different(field_vars[region_to_fields_map[region]])
+                                for region in pixel_to_region_map
+                            ]
+                        )
                     if appmag_dist:
                         for pixel_var, region_index, breakpoints in zip(
                             pixel_vars, pixel_to_region_map, piecewise_breakpoints
@@ -1351,11 +1483,18 @@ def schedule(
                     )
 
             with status("adding cuts"):
-                model.add_user_cut_constraint(
-                    model.sum_vars_all_different(field_vars)
-                    <= (deadline - delay).to_value(u.s) / visit_exptime_min_s.sum()
-                )
-                if adaptive_exptime:
+                if not adaptive_exptime:
+                    model.add_user_cut_constraint(
+                        model.scal_prod_vars_all_different(
+                            field_vars, fixed_exptime_field_visit_s.sum(axis=1)
+                        ) <= (deadline - delay).to_value(u.s)
+                    )
+                else:
+                    if exptime_min_s > 0:
+                        model.add_user_cut_constraint(
+                            model.sum_vars_all_different(field_vars)
+                            <= (deadline - delay).to_value(u.s) / visit_exptime_min_s.sum()
+                        )
                     model.add_user_cut_constraint(
                         model.sum_vars_all_different(exptime_field_vars)
                         <= (deadline - delay).to_value(u.s) / visits
@@ -1410,12 +1549,13 @@ def schedule(
                 time_field_visit_values = solution.get_values(time_field_visit_vars)
                 if adaptive_exptime:
                     exptime_per_field = solution.get_values(exptime_field_vars)
-                    field_values &= exptime_per_field > 0
+                    if not capped_exposure:
+                        field_values &= exptime_per_field > 0
                     exptime_field_values = np.tile(
                         exptime_per_field[:, np.newaxis], visits
                     )
                 else:
-                    exptime_field_values = np.tile(visit_exptime_min_s, (n_fields, 1))
+                    exptime_field_values = fixed_exptime_field_visit_s
                 ######Daisy added: report achieved coverage in ordinary probability units.
                 objective_value = solution.get_objective_value() / objective_scale
 
