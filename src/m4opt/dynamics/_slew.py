@@ -387,12 +387,12 @@ class TwoAxisSlew(Slew, TwoAxisAngularMotionProfile):
         :
             Longitude-axis and latitude-axis distances, respectively.
         """
-        assert center1.is_equivalent_frame(center2)
+        # assert center1.is_equivalent_frame(center2)
 
-        center1 = center1.spherical
-        center2 = center2.spherical
+        # center1 = center1.spherical
+        # center2 = center2.spherical
 
-        longitude = abs((center2.lon - center1.lon).wrap_at(180 * u.deg))
+        longitude = abs(center2.lon - center1.lon)
         latitude = abs(center2.lat - center1.lat)
 
         long_angle = Angle(longitude, unit=u.deg)

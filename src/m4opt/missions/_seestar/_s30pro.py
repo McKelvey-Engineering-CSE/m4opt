@@ -5,7 +5,7 @@ from regions import RectangleSkyRegion
 from synphot import Empirical1D, SpectralElement
 
 from ... import skygrid
-from ...constraints import DeclinationConstraint
+from ...constraints import AltitudeConstraint
 from ...dynamics import AngularMotionProfile, TwoAxisSlew
 from ...observer import EarthFixedObserverLocation
 from ...synphot import Detector
@@ -19,7 +19,7 @@ s30pro = Mission(
     fov=RectangleSkyRegion(
         center=SkyCoord(0 * u.deg, 0 * u.deg), width=2.4 * u.deg, height=4.3 * u.deg
     ),
-    constraints=DeclinationConstraint(-90 * u.deg, 87.5 * u.deg),
+    constraints=AltitudeConstraint(-90 * u.deg, 87.5 * u.deg),
     detector=Detector(
         npix=4 * np.pi,
         # IMX585 2.9 um pixels and the S30 Pro's approximately 150 mm focal
