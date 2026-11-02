@@ -184,7 +184,7 @@ SPECTRAL = SpectralElement(
         0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
         0.0,
     ],
-),
+)
 
 
 s30pro = Mission(
