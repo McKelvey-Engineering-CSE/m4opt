@@ -17,6 +17,8 @@ from ligo.skymap import distance
 from ligo.skymap.bayestar import rasterize
 from ligo.skymap.io import read_sky_map
 from scipy import stats
+from seestar import SeeStarS30
+from alpaca.camera import Camera
 
 from time import perf_counter # for tracking planning time
 
@@ -1007,6 +1009,11 @@ def schedule(
         table.meta["planning_time"] = (perf_counter() - planning_started) * u.s
         table.write(schedule, format="ascii.ecsv", overwrite=True)
 
+        with status("running telescope") as msg:
+            telescope = SeeStarS30("seestar.local:32323")
+            telescope.read_ecsv(table, telescope.device("tele", Camera), msg)
+
+
     ######## Daisy: added, Call one of the C++ solvers at this point
     # Everything before this point remains M4OPT's normal preprocessing:
     # (field selection, footprint generation, pixel compaction, exposure-time calculation, and slew-time calculation.)
@@ -1016,10 +1023,10 @@ def schedule(
                 "C++ solvers currently support --visits 1 only"
             )
 
-        if time_windows:
-            raise UsageError(
-                "C++ solvers currently require --no-time-windows"
-            )
+        # if time_windows:
+        #     raise UsageError(
+        #         "C++ solvers currently require --no-time-windows"
+        #     )
 
         if adaptive_exptime and appmag_dist:
             raise UsageError(
@@ -1228,6 +1235,8 @@ def schedule(
             solver_call_seconds=solver_call_seconds,
             solver_algorithm=result.get("algorithm", normalized_algorithm),
         )
+
+
         return
     ##########
 

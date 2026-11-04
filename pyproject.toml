@@ -31,6 +31,8 @@ dependencies = [
     "synphot",
     "typer >= 0.26.0",
     "xdg-base-dirs",
+    "pandas>=3.1.0",
+    "seestar",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -198,3 +200,6 @@ checks = [
 
 [tool.extension-helpers]
 use_extension_helpers = true
+
+[tool.uv.sources]
+seestar = { path = "/home/punit/Documents/SeeStar/dist/seestar-0.6.0-py3-none-any.whl" }

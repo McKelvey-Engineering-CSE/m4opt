@@ -107,16 +107,30 @@ class IndentedSpinnerColumn(SpinnerColumn):
 
 @contextmanager
 def status(description: str):
-    """Context manager to track the runtime of a task."""
+    """Context manager to track the runtime of a task.
+
+    The context manager yields a callable that can be used to update the
+    description while the task is running::
+
+        with status("Solving") as update:
+            update("Solving: phase 1")
+            solve_phase_one()
+            update("Solving: phase 2")
+            solve_phase_two()
+    """
     global _depth
     if _depth >= _max_depth:
-        yield
+        yield lambda description: None
     else:
         with progress() as pg:
             task = pg.add_task(description, total=1, depth=_depth, failed=False)
             _depth += 1
+
+            def update(new_description: str) -> None:
+                pg.update(task, description=new_description)
+
             try:
-                yield
+                yield update
             except:
                 pg.update(task, failed=True)
                 raise

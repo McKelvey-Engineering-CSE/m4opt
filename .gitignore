@@ -70,3 +70,10 @@ pip-wheel-metadata/
 
 # Mac OSX
 .DS_Store
+
+# Media
+*.csv
+*.ecsv
+*.png
+*.fits
+*.gif

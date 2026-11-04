@@ -194,7 +194,7 @@ s30pro = Mission(
     fov=RectangleSkyRegion(
         center=SkyCoord(0 * u.deg, 0 * u.deg), width=2.26 * u.deg, height=3.99 * u.deg
     ),
-    constraints=AltitudeConstraint(0* u.deg, 87.5 * u.deg),
+    constraints=AltitudeConstraint(0 * u.deg, 85 * u.deg),
     detector=Detector(
         npix=4 * np.pi,
         # IMX585 2.9 um pixels and the S30 Pro's approximately 150 mm focal
@@ -217,13 +217,13 @@ s30pro = Mission(
     skygrid=skygrid.extend_skygrid(skygrid.geodesic(1.5 * u.deg**2, class_="III", base="icosahedron"), 500 * u.deg),
     slew=TwoAxisSlew(
         longitudinal=AngularMotionProfile(
-            max_angular_velocity=6 * u.deg / u.s,
-            max_angular_acceleration=100 * u.deg / u.s**2,
+            max_angular_velocity=5.99 * u.deg / u.s,
+            max_angular_acceleration=0.22 * u.deg / u.s**2,
             settling_time=0 * u.s,
         ),
         latitudinal=AngularMotionProfile(
-            max_angular_velocity=6 * u.deg / u.s,
-            max_angular_acceleration=100 * u.deg / u.s**2,
+            max_angular_velocity=6.05 * u.deg / u.s,
+            max_angular_acceleration=0.59 * u.deg / u.s**2,
             settling_time=0 * u.s,
         ),
         simultaneous_axis_motion=False,
