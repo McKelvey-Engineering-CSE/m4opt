@@ -1,6 +1,9 @@
 import pytest
-from docplex.mp.utils import DOcplexLimitsExceeded
 
+try:
+    from docplex.mp.utils import DOcplexLimitsExceeded
+except ImportError:
+    DOcplexLimitsExceeded = object
 
 def _skip_if_problem_too_large(outcome):
     if outcome.excinfo is not None and issubclass(

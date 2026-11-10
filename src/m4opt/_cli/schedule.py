@@ -12,7 +12,6 @@ from astropy.table import QTable, vstack
 from astropy.time import Time
 from astropy_healpix import HEALPix
 from click import UsageError
-from docplex.mp.progress import ProgressData, ProgressDataRecorder
 from ligo.skymap import distance
 from ligo.skymap.bayestar import rasterize
 from ligo.skymap.io import read_sky_map
@@ -31,6 +30,12 @@ from ..utils.console import progress, status
 from ..utils.numpy import clump_nonzero_inclusive, full_indices
 from .core import app
 
+
+try:
+    from docplex.mp.progress import ProgressData, ProgressDataRecorder
+except ImportError:
+    ProgressData = object
+    ProgressDataRecorder = object
 
 def invert_footprints(footprints, n_pixels):
     """

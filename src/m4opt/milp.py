@@ -10,15 +10,21 @@ from tempfile import NamedTemporaryFile, gettempdir
 from types import GeneratorType
 from unittest.mock import patch
 
-import cplex
 import numpy as np
 from astropy import units as u
-from docplex.mp.model import Model as _Model
-from docplex.mp.solution import SolveSolution as _SolveSolution
 from numpy import typing as npt
 
 from .utils.console import status
 from .utils.numpy import atmost_1d
+
+try:
+    import cplex
+    from docplex.mp.model import Model as _Model
+    from docplex.mp.solution import SolveSolution as _SolveSolution
+except ImportError:
+    cplex = None
+    _Model = object
+    _SolveSolution = object
 
 __all__ = ("Model", "SolveSolution")
 
@@ -96,6 +102,11 @@ class Model(_Model):
         .. _`solution pool`: https://www.ibm.com/docs/en/icos/22.1.1?topic=parameters-maximum-number-solutions-kept-in-solution-pool
         .. _`opportunistic parallelism`: https://www.ibm.com/docs/en/icos/22.1.1?topic=parameters-parallel-mode-switch
         """
+        if cplex is None:
+            raise ImportError(
+                "CPLEX is not installed. Please install the optional dependencies with `pip install m4opt[cplex]`"
+            )
+
         super().__init__()
 
         self.abs: Callable[[npt.ArrayLike], npt.ArrayLike] = np.vectorize(
